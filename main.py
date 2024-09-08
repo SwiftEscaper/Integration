@@ -42,7 +42,7 @@ def main():
             break
         
         ########################################## crash 시작
-        
+        '''
         cars_dict = crashDetection.update_car_data_xy(cars_dict, bounding_boxes, track_ids)
         crashDetection.remove_missing_cars(cars_dict, track_ids, frames_since_last_seen, max_frames_missing)
         
@@ -50,10 +50,33 @@ def main():
             flag = crashDetection.stop_detection(cars_dict, frame_size=frame_size, threshold=2)  # threshold는 몇 픽셀 이하 움직임을 추돌로 판단
             logging.info(f'Crash Result: {flag}')
             
-            if flag == Accident.CRASH:
+            if flag == True:
                 accidentHandler.send_accident_data(cctv_name, Accident.CRASH, LATITUDE, LONGITUDE)
-        
+        '''
         ########################################## crash 끝
+        
+        ########################################## fire 시작
+        
+        ## 수정: crash와 fire cv 동시에
+        ##       fire 함수 수정 
+        
+        # Convert bounding boxes to the format required by fire detection
+        vehicle_boxes = []
+        if bounding_boxes is not None:
+            for bbox in bounding_boxes:
+                x, y, w, h = bbox
+                x1, y1, x2, y2 = int(x - w / 2), int(y - h / 2), int(x + w / 2), int(y + h / 2)
+                vehicle_boxes.append([x1, y1, x2, y2])
+        
+        # Fire detection using fireDetection module
+        # fire -> 0: 없음 1: 화재
+        fire, fire_size = fireDetection.detect_fire(frame, vehicle_boxes)
+        logging.info(f'Fire Result: {fire}')
+        
+        if fire == 1:
+            accidentHandler.send_accident_data(cctv_name, Accident.FIRE, LATITUDE, LONGITUDE)
+        
+        ########################################## fire 끝
         
         cv2.imshow('Video', frame)
         

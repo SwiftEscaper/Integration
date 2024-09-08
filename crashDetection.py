@@ -5,7 +5,7 @@ import getFrame
 
 
 # 차량 정지 확인 함수
-def stop_detection(cars_dict):
+def stop_detection(cars_dict, frame_size, threshold):
     stationary_cars = 0  # 정지한 차량 수
     total_cars = len(cars_dict)  # 전체 차량 수
     
@@ -29,8 +29,8 @@ def stop_detection(cars_dict):
         #with open('center.txt', 'a') as file:
         #    file.write(f'center: {data}\n') 
         
-        # 각 차량의 마지막 100 프레임 동안의 x, y 좌표 리스트 가져오기
-        centers = data[-100:]
+        # 각 차량의 마지막 frame_size 프레임 동안의 x, y 좌표 리스트 가져오기
+        centers = data[-frame_size:]
         x_positions = [pos[0] for pos in centers]  # x 좌표 리스트 
         y_positions = [pos[1] for pos in centers]  # y 좌표 리스트
         
@@ -43,7 +43,7 @@ def stop_detection(cars_dict):
         
         # 변화 없는 프레임 수 카운트
         stationary_frames = 0
-        threshold = 2  # 임계값 설정 (예: 2 픽셀 이하의 변화는 정지로 판단)
+        #threshold = 2  # 임계값 설정 (예: 2 픽셀 이하의 변화는 정지로 판단)
 
         # 한 차량에 대해 계산 (100프레임동안)
         for i in range(1, len(x_positions)):

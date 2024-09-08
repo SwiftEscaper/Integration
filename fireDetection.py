@@ -9,6 +9,12 @@ from models.common import DetectMultiBackend
 from utils.general import (LOGGER, non_max_suppression, scale_boxes)
 from utils.torch_utils import select_device, smart_inference_mode
 
+import logging
+
+import getFrame
+
+logging.basicConfig(filename="log.txt", filemode="w", level=logging.DEBUG)
+
 # 경로 및 설정 정의
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLO 루트 디렉토리
@@ -23,25 +29,6 @@ fire_model = DetectMultiBackend(ROOT / 'best.pt', device=device, dnn=False, data
 
 stride, names, pt = fire_model.stride, fire_model.names, fire_model.pt
 
-def process_frame(video, model):
-    retval, frame = video.read()  # retval: 성공하면 True
-    if not retval:
-        return None, None, None  # track_ids 추가
-
-    # 모델 추론
-    tracks = model.track(frame, persist=True, classes=[2, 3, 5, 7], conf=0.2, iou=0.6)
-    
-    frame = tracks[0].plot()  # track 이미지
-    
-    bounding_boxes = tracks[0].boxes.xywh.cpu()  # x, y, w, h
-    track_ids = tracks[0].boxes.id
-
-    if track_ids is None:
-        track_ids = []
-    else:
-        track_ids = track_ids.int().cpu().tolist()
-
-    return frame, bounding_boxes, track_ids  # 세 개의 값 반환
 
 def calculate_iou(box1, box2):
     """
@@ -70,28 +57,32 @@ def classify_fire_size(area: int) -> str:
     else:  # 큰 화재(3.5m)
         return "대형"
 
-def detect_fire(frame, bounding_boxes, vehicle_boxes):
+def detect_fire(frame, vehicle_boxes):
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
     # 이미지를 tensor로 변환하고, 모델이 요구하는 형식으로 변환
     im = torch.from_numpy(frame).permute(2, 0, 1).float().to(fire_model.device)  # HWC -> CHW
     im /= 255.0  # 0-255 범위를 0.0-1.0으로 변환
 
+    # 배치 차원 추가
     if len(im.shape) == 3:
-        im = im[None]  # 배치 차원 추가
+        im = im[None]  
 
     # 모델이 요구하는 크기로 이미지 크기 조정
     new_shape = (640, 640)
     im = torch.nn.functional.interpolate(im, size=new_shape, mode='bilinear', align_corners=False)
 
-    # 예측 수행
+    # 예측 수행 (첫 번째 결과만 사용)
     pred = fire_model(im, augment=False, visualize=False)
     if isinstance(pred, list):
         pred = pred[0]
 
-    # NMS (Non-Maximum Suppression) 적용
+    # NMS (Non-Maximum Suppression) 적용 -> 중복되는 바운딩 박스 제거
+    # conf = 0.3 이상인 박스만 남김, iou = 0.5 이상인 박스를 제거
     pred = non_max_suppression(pred, 0.3, 0.5, classes=None, agnostic=False, max_det=1000)
 
+    flag = 0  # 0: 화재 없음 1: 화재 있음
+    fire_size = None  # 화재 크기 (0, 1, 2 -> 소, 중, 대)
     detections = []
     for i, det in enumerate(pred):
         if len(det):
@@ -100,20 +91,25 @@ def detect_fire(frame, bounding_boxes, vehicle_boxes):
                 x1, y1, x2, y2 = map(int, xyxy)
                 width, height = x2 - x1, y2 - y1
                 area = width * height
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red rectangle for firec
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red rectangle for fire
 
                 # IoU 계산하여 차량 영역과 비교
                 ignore_detection = False
                 for vehicle_box in vehicle_boxes:
                     iou = calculate_iou([x1, y1, x2, y2], vehicle_box)
-                    LOGGER.info(vehicle_box)  # 시작 로그
+                    logging.info(vehicle_box)  # 시작 로그
                     if iou > 0.6:  # 임계값 설정 (예: IoU > 0.5이면 무시)
-                        LOGGER.info(f"탐지 결과: 차량 영역과 {iou:.2f} IoU로 겹쳐 무시됨")
+                        logging.info(f"탐지 결과: 차량 영역과 {iou:.2f} IoU로 겹쳐 무시됨")
                         ignore_detection = True
                         break
 
+                # 화재 크기 분류
                 if not ignore_detection:
+                    flag = 1
+                    
                     size_class = classify_fire_size(area)
+                    fire_size = size_class
+                    
                     detections.append({
                         'bbox': [int(coord) for coord in xyxy],
                         'confidence': float(conf),
@@ -121,21 +117,28 @@ def detect_fire(frame, bounding_boxes, vehicle_boxes):
                         'size' : size_class
                     })
                     # 화재 박스를 프레임에 표시
-                    LOGGER.info(f"탐지 결과: {detections[-1]}")
+                    logging.info(f"탐지 결과: {detections[-1]}")
         
         cv2.imshow('Video', frame)
+        
+    return flag, fire_size
 
 def main():
     LOGGER.info("모델 추론 시작...")  # 시작 로그
     source = str(ROOT / 'input.mp4')  # 로컬 비디오 파일 경로
-    
     LOGGER.info(f"비디오 파일 로드 중: {source}")
     vid_cap = cv2.VideoCapture(source)
+    
+    '''
+    cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
+    LOGGER.info(f"비디오 파일 로드 중: {cctv_url}")
+    vid_cap = cv2.VideoCapture(cctv_url)
+    '''
     
     vehicle_boxes = []
 
     while True:
-        frame, bounding_boxes, track_ids = process_frame(vid_cap, vehicle_model)
+        frame, bounding_boxes, track_ids = getFrame.process_frame(vid_cap, vehicle_model)
         
         if frame is None:
             break
@@ -149,7 +152,7 @@ def main():
                 vehicle_boxes.append([x1, y1, x2, y2])
                 
         # 화재 탐지
-        detect_fire(frame, bounding_boxes, vehicle_boxes)
+        detect_fire(frame, vehicle_boxes)
     
         
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -160,4 +163,9 @@ def main():
 
 
 if __name__ == "__main__":
+    LATITUDE = 37.517423
+    LONGITUDE = 127.17903
+    
+    CCTV_KEY = '19d87e10ec6a47938d779192bd5ef763'
+    
     main()
