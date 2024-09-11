@@ -51,11 +51,11 @@ def calculate_iou(box1, box2):
 def classify_fire_size(area: int) -> str:
     """화재의 면적에 따라 크기를 분류"""
     if area < 8000:  # 작은 화재(1m)
-        return "소형"
+        return "mini"
     elif 8000 <= area < 20000:  # 중간 크기의 화재 (2.5m)
-        return "중형"
+        return "middle"
     else:  # 큰 화재(3.5m)
-        return "대형"
+        return "big"
 
 def detect_fire(frame, vehicle_boxes):
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -81,7 +81,7 @@ def detect_fire(frame, vehicle_boxes):
     # conf = 0.3 이상인 박스만 남김, iou = 0.5 이상인 박스를 제거
     pred = non_max_suppression(pred, 0.3, 0.5, classes=None, agnostic=False, max_det=1000)
 
-    flag = 0  # 0: 화재 없음 1: 화재 있음
+    flag = False
     fire_size = None  # 화재 크기 (0, 1, 2 -> 소, 중, 대)
     detections = []
     for i, det in enumerate(pred):
@@ -97,15 +97,15 @@ def detect_fire(frame, vehicle_boxes):
                 ignore_detection = False
                 for vehicle_box in vehicle_boxes:
                     iou = calculate_iou([x1, y1, x2, y2], vehicle_box)
-                    logging.info(vehicle_box)  # 시작 로그
+                    #logging.info(vehicle_box)  # 시작 로그
                     if iou > 0.6:  # 임계값 설정 (예: IoU > 0.5이면 무시)
-                        logging.info(f"탐지 결과: 차량 영역과 {iou:.2f} IoU로 겹쳐 무시됨")
+                        logging.info(f"Fire Result in Func: Car {iou:.2f} IoU Ignore")
                         ignore_detection = True
                         break
 
                 # 화재 크기 분류
                 if not ignore_detection:
-                    flag = 1
+                    flag = True
                     
                     size_class = classify_fire_size(area)
                     fire_size = size_class
@@ -116,16 +116,15 @@ def detect_fire(frame, vehicle_boxes):
                         'class': names[int(cls)],
                         'size' : size_class
                     })
-                    # 화재 박스를 프레임에 표시
-                    logging.info(f"탐지 결과: {detections[-1]}")
+                    logging.info(f"Fire Result in Func: {detections[-1]}")
         
         cv2.imshow('Video', frame)
         
-    return flag, fire_size
+    return flag, fire_size, pred, im
 
 def main():
     LOGGER.info("모델 추론 시작...")  # 시작 로그
-    source = str(ROOT / 'input.mp4')  # 로컬 비디오 파일 경로
+    source = str(ROOT / 'fire.mp4')  # 로컬 비디오 파일 경로
     LOGGER.info(f"비디오 파일 로드 중: {source}")
     vid_cap = cv2.VideoCapture(source)
     

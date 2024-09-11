@@ -2,6 +2,7 @@ import cv2
 from ultralytics import YOLO
 import logging
 import requests
+from utils.general import scale_boxes
 
 import fireDetection
 import crashDetection
@@ -22,7 +23,10 @@ logging.basicConfig(filename="log.txt", filemode="w", level=logging.DEBUG)
 def main():
     model = YOLO(YOLO_MODEL_PATH)  
     
-    cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
+    #cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
+    
+    cctv_name = "temp"
+    cctv_url = "fire2.mp4"
     video = cv2.VideoCapture(cctv_url)
     
     counter = 1
@@ -42,17 +46,17 @@ def main():
             break
         
         ########################################## crash 시작
-        '''
+        #'''
         cars_dict = crashDetection.update_car_data_xy(cars_dict, bounding_boxes, track_ids)
         crashDetection.remove_missing_cars(cars_dict, track_ids, frames_since_last_seen, max_frames_missing)
         
         if counter % frame_size == 0:
-            flag = crashDetection.stop_detection(cars_dict, frame_size=frame_size, threshold=2)  # threshold는 몇 픽셀 이하 움직임을 추돌로 판단
-            logging.info(f'Crash Result: {flag}')
+            crash_flag = crashDetection.stop_detection(cars_dict, frame_size=frame_size, threshold=2)  # threshold는 몇 픽셀 이하 움직임을 추돌로 판단
+            logging.info(f'Crash Result: {crash_flag}')
             
-            if flag == True:
+            if crash_flag:
                 accidentHandler.send_accident_data(cctv_name, Accident.CRASH, LATITUDE, LONGITUDE)
-        '''
+        #'''
         ########################################## crash 끝
         
         ########################################## fire 시작
@@ -69,15 +73,16 @@ def main():
                 vehicle_boxes.append([x1, y1, x2, y2])
         
         # Fire detection using fireDetection module
-        # fire -> 0: 없음 1: 화재
-        fire, fire_size = fireDetection.detect_fire(frame, vehicle_boxes)
-        logging.info(f'Fire Result: {fire}')
+        fire_flag, fire_size, pred, im = fireDetection.detect_fire(frame, vehicle_boxes)
+        logging.info(f'Fire Result: {fire_flag}')
         
-        if fire == 1:
+        if fire_flag:
             accidentHandler.send_accident_data(cctv_name, Accident.FIRE, LATITUDE, LONGITUDE)
         
-        ########################################## fire 끝
         
+        
+        ########################################## fire 끝
+
         cv2.imshow('Video', frame)
         
         if cv2.waitKey(1) & 0xFF == ord("q"):
