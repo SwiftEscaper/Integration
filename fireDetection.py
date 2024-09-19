@@ -1,4 +1,3 @@
-import numpy as np
 import cv2
 import torch
 from ultralytics import YOLO
@@ -10,8 +9,9 @@ from utils.general import (LOGGER, non_max_suppression, scale_boxes)
 from utils.torch_utils import select_device, smart_inference_mode
 
 import logging
-
 import getFrame
+
+YOLO_MODEL_PATH = 'yolov8n.pt'
 
 logging.basicConfig(filename="log.txt", filemode="w", level=logging.DEBUG)
 
@@ -24,11 +24,9 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # 상대 경로로 변환
 
 # YOLO 모델 로드
 device = select_device('')  # GPU
-vehicle_model = YOLO("yolov8n.pt")
 fire_model = DetectMultiBackend(ROOT / 'best.pt', device=device, dnn=False, data=ROOT / 'data/coco.yaml', fp16=False)  # 화재 탐지 모델
 
 stride, names, pt = fire_model.stride, fire_model.names, fire_model.pt
-
 
 def calculate_iou(box1, box2):
     """
@@ -48,14 +46,16 @@ def calculate_iou(box1, box2):
 
     return iou
 
+
 def classify_fire_size(area: int) -> str:
     """화재의 면적에 따라 크기를 분류"""
     if area < 8000:  # 작은 화재(1m)
-        return "mini"
+        return "small"
     elif 8000 <= area < 20000:  # 중간 크기의 화재 (2.5m)
-        return "middle"
+        return "medium "
     else:  # 큰 화재(3.5m)
-        return "big"
+        return "large"
+
 
 def detect_fire(frame, vehicle_boxes):
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -81,63 +81,54 @@ def detect_fire(frame, vehicle_boxes):
     # conf = 0.3 이상인 박스만 남김, iou = 0.5 이상인 박스를 제거
     pred = non_max_suppression(pred, 0.3, 0.5, classes=None, agnostic=False, max_det=1000)
 
-    flag = False
-    fire_size = None  # 화재 크기 (0, 1, 2 -> 소, 중, 대)
     detections = []
+    
     for i, det in enumerate(pred):
-        if len(det):
+        if len(det):  # 해당 프레임에서 탐지된 화재 객체가 있다면
             det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], frame.shape).round()
+            
             for *xyxy, conf, cls in reversed(det):
                 x1, y1, x2, y2 = map(int, xyxy)
                 width, height = x2 - x1, y2 - y1
                 area = width * height
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red rectangle for fire
+                #cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red rectangle for fire
 
+                # 각 객체마다 ignore_detection을 False로 초기화
+                ignore_detection = False  
+            
                 # IoU 계산하여 차량 영역과 비교
-                ignore_detection = False
                 for vehicle_box in vehicle_boxes:
                     iou = calculate_iou([x1, y1, x2, y2], vehicle_box)
-                    #logging.info(vehicle_box)  # 시작 로그
                     if iou > 0.6:  # 임계값 설정 (예: IoU > 0.5이면 무시)
-                        logging.info(f"Fire Result in Func: Car {iou:.2f} IoU Ignore")
-                        ignore_detection = True
-                        break
+                        logging.info(f"Fire Result in firedetection.py: Car {iou:.2f} IoU Ignore, flag: {ignore_detection}")
+                        ignore_detection = True  
+                        continue  # 현재 탐지 무시
 
-                # 화재 크기 분류
                 if not ignore_detection:
-                    flag = True
-                    
-                    size_class = classify_fire_size(area)
-                    fire_size = size_class
-                    
                     detections.append({
+                        'class': names[int(cls)],   # x1, y1, x2, y2
                         'bbox': [int(coord) for coord in xyxy],
-                        'confidence': float(conf),
-                        'class': names[int(cls)],
-                        'size' : size_class
+                        'confidence': float(conf)
                     })
                     logging.info(f"Fire Result in Func: {detections[-1]}")
         
-        cv2.imshow('Video', frame)
+        #cv2.imshow('Video', frame)
         
-    return flag, fire_size, pred, im
+    return detections
 
 def main():
-    LOGGER.info("모델 추론 시작...")  # 시작 로그
     source = str(ROOT / 'fire.mp4')  # 로컬 비디오 파일 경로
-    LOGGER.info(f"비디오 파일 로드 중: {source}")
     vid_cap = cv2.VideoCapture(source)
     
     '''
     cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
-    LOGGER.info(f"비디오 파일 로드 중: {cctv_url}")
     vid_cap = cv2.VideoCapture(cctv_url)
     '''
     
     vehicle_boxes = []
 
     while True:
-        frame, bounding_boxes, track_ids = getFrame.process_frame(vid_cap, vehicle_model)
+        frame, bounding_boxes, track_ids = getFrame.process_frame(vid_cap, YOLO(YOLO_MODEL_PATH))
         
         if frame is None:
             break
@@ -153,7 +144,6 @@ def main():
         # 화재 탐지
         detect_fire(frame, vehicle_boxes)
     
-        
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 

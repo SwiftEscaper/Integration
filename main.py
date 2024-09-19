@@ -2,13 +2,14 @@ import cv2
 from ultralytics import YOLO
 import logging
 import requests
-from utils.general import scale_boxes
 
 import fireDetection
 import crashDetection
 import getFrame
 import accidentHandler
 from accidentEnum import Accident
+
+import time
 
 
 YOLO_MODEL_PATH = 'yolov8n.pt'
@@ -20,13 +21,25 @@ CCTV_KEY = '19d87e10ec6a47938d779192bd5ef763'
 
 logging.basicConfig(filename="log.txt", filemode="w", level=logging.DEBUG)
 
+
+# 시간 전용 로거
+time_logger = logging.getLogger('timeLogger')
+time_logger.setLevel(logging.INFO)
+time_handler = logging.FileHandler("time_log.txt", mode='w')
+time_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(message)s')
+time_handler.setFormatter(formatter)
+time_logger.addHandler(time_handler)
+
+
 def main():
     model = YOLO(YOLO_MODEL_PATH)  
     
-    #cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
+    cctv_url, cctv_name = getFrame.get_cctv_data(LATITUDE, LONGITUDE, CCTV_KEY)
     
-    cctv_name = "temp"
-    cctv_url = "fire2.mp4"
+    #cctv_name = "temp"
+    #cctv_url = "input.mp4"
+    
     video = cv2.VideoCapture(cctv_url)
     
     counter = 1
@@ -35,6 +48,8 @@ def main():
     frames_since_last_seen = {}
     cars_dict = {}  # id: [x, y] 형식으로 저장
     frame_size = 100  # 추돌에서 몇 프레임동안 검사할건지
+    
+    start_time = time.time()  # 시작 시간 기록
     
     while True:        
         print(f'Processing frame: {counter}')
@@ -55,14 +70,14 @@ def main():
             logging.info(f'Crash Result: {crash_flag}')
             
             if crash_flag:
+                # 센서 값 get 요청
+                # get 응답 받아서 다시 사고 VM으로 정보 전송
                 accidentHandler.send_accident_data(cctv_name, Accident.CRASH, LATITUDE, LONGITUDE)
         #'''
         ########################################## crash 끝
         
         ########################################## fire 시작
-        
-        ## 수정: crash와 fire cv 동시에
-        ##       fire 함수 수정 
+
         
         # Convert bounding boxes to the format required by fire detection
         vehicle_boxes = []
@@ -73,13 +88,31 @@ def main():
                 vehicle_boxes.append([x1, y1, x2, y2])
         
         # Fire detection using fireDetection module
-        fire_flag, fire_size, pred, im = fireDetection.detect_fire(frame, vehicle_boxes)
-        logging.info(f'Fire Result: {fire_flag}')
+        fire_dict = fireDetection.detect_fire(frame, vehicle_boxes)
+        #logging.info(f'Fire Result: {fire_dict}')
         
-        if fire_flag:
-            accidentHandler.send_accident_data(cctv_name, Accident.FIRE, LATITUDE, LONGITUDE)
-        
-        
+        if fire_dict:
+            for fire in fire_dict:
+                #logging.info(f'Fire Result: {fire_dict}')
+                
+                confidence = fire['confidence']
+                
+                if confidence >= 0.75:
+                    logging.info(f'Fire Result: True, {fire_dict}')
+                    
+                    x1, y1, x2, y2 = fire['bbox']
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    
+                    fire_class = fire['class']
+                    label = f"{fire_class} ({confidence:.2f})"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    
+                    # 센서 값 get 요청
+                    # get 응답 받아서 다시 사고 VM으로 정보 전송
+                    accidentHandler.send_accident_data(cctv_name, Accident.FIRE, LATITUDE, LONGITUDE)
+                    
+        else:
+            logging.info('Fire Result: False')
         
         ########################################## fire 끝
 
@@ -88,6 +121,13 @@ def main():
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
         
+        
+        # 200 프레임마다 경과 시간 기록
+        if counter % 200 == 0:
+            end_time = time.time() - start_time
+            time_logger.info(f'Processed 200 frames in {end_time:.2f} seconds')
+            start_time = time.time()  # 시간 초기화
+            
         counter += 1
         
     cv2.destroyAllWindows()
